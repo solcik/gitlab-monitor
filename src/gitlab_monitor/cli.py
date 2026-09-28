@@ -4,6 +4,7 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
+from importlib import metadata
 from typing import Literal, get_args
 from urllib.parse import quote
 
@@ -32,6 +33,32 @@ class WatchTarget(BaseModel):
 
 
 TARGETS = TypeAdapter(list[WatchTarget])
+
+try:
+    VERSION = metadata.version("gitlab-agent-monitor")
+except metadata.PackageNotFoundError:
+    VERSION = "unknown"
+
+TARGET_HELP = """
+\b
+KIND selects the event. RESOURCE is the IID or id that KIND names:
+  issue-comments  new human note on issue IID
+  mr-feedback     new human note or thread reply on MR IID
+  mr-conflicts    MR IID has merge conflicts
+  mr-approvals    MR IID becomes approved
+  pipeline        pipeline id reaches the --until status
+PROJECT is a numeric project id or a full path such as group/repo.
+"""
+
+EXIT_HELP = """
+\b
+Output is one JSON object per line on stdout.
+Exit codes:
+  0    a matching event occurred (without --follow)
+  1    GitLab API or glab failure
+  2    usage error
+  124  --timeout expired (with --follow, after any events)
+"""
 
 
 def parse_query(value):
@@ -209,19 +236,44 @@ def watch_many(client, targets, interval, timeout, follow, query=None):
         time.sleep(interval)
 
 
-@click.group()
+@click.group(context_settings={"show_default": True})
+@click.version_option(VERSION)
 @click.option(
-    "--url", default="https://gitlab.com", show_default=True, envvar="GITLAB_URL"
+    "--url",
+    default="https://gitlab.com",
+    envvar="GITLAB_URL",
+    show_envvar=True,
+    help="GitLab instance. Its hostname is passed to glab.",
 )
 @click.option(
-    "--token", envvar="GITLAB_TOKEN", help="GitLab private token. Prefer GITLAB_TOKEN."
+    "--token",
+    envvar="GITLAB_TOKEN",
+    show_envvar=True,
+    help="GitLab private token. Prefer GITLAB_TOKEN. Without a token, glab runs.",
 )
 @click.option(
-    "--glab-bin", default="glab", show_default=True, envvar="GITLAB_MONITOR_GLAB_BIN"
+    "--glab-bin",
+    default="glab",
+    envvar="GITLAB_MONITOR_GLAB_BIN",
+    show_envvar=True,
+    help="glab executable or wrapper, such as glab-agent.",
 )
 @click.pass_context
 def main(ctx, url, token, glab_bin):
-    """Watch GitLab resources when an agent needs a specific event."""
+    """Watch GitLab resources when an agent needs a specific event.
+
+    \b
+    inspect     print the current state and exit
+    watch       wait for one event on one resource
+    watch-many  wait for events on several resources
+
+    The command never changes GitLab. It only reads.
+
+    \b
+    Example:
+      gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent \\
+        watch pipeline group/repo 32147 --until success --timeout 3600
+    """
     if token:
         ctx.obj = TokenClient(url, token)
     else:
@@ -233,7 +285,7 @@ def main(ctx, url, token, glab_bin):
         ctx.obj = GlabClient(glab_bin, host)
 
 
-@main.command()
+@main.command(epilog=TARGET_HELP + EXIT_HELP)
 @click.argument(
     "kind",
     type=click.Choice(WATCH_KINDS),
@@ -244,10 +296,13 @@ def main(ctx, url, token, glab_bin):
     "--until",
     type=click.Choice(PIPELINE_STATUSES),
     default="failed",
-    show_default=True,
+    help="Pipeline status to wait for. Other kinds ignore it.",
 )
 @click.option(
-    "--interval", type=click.FloatRange(min=0.1), default=15.0, show_default=True
+    "--interval",
+    type=click.FloatRange(min=0.1),
+    default=15.0,
+    help="Seconds between polls.",
 )
 @click.option(
     "--timeout",
@@ -262,7 +317,11 @@ def main(ctx, url, token, glab_bin):
 def watch_command(
     client, kind, project, resource, until, interval, timeout, follow, query
 ):
-    """Emit JSON when a matching event occurs."""
+    """Emit JSON when a matching event occurs.
+
+    Comment watches report only notes that appear after the first poll.
+    State watches report a matching current state at once.
+    """
     try:
         target = WatchTarget(kind=kind, project=project, resource=resource, until=until)
         watch_many(client, [target], interval, timeout, follow, parse_query(query))
@@ -270,12 +329,23 @@ def watch_command(
         raise click.ClickException(str(error)) from error
 
 
-@main.command("watch-many")
+@main.command(
+    "watch-many",
+    epilog=TARGET_HELP
+    + """
+\b
+The --input JSON is an array of targets:
+  [{"kind": "pipeline", "project": "group/repo",
+    "resource": 32147, "until": "success"}]
+"""
+    + EXIT_HELP,
+)
 @click.option(
     "--target",
     type=(click.Choice(WATCH_KINDS), str, str),
     multiple=True,
-    help="Repeat with KIND PROJECT RESOURCE.",
+    metavar="KIND PROJECT RESOURCE",
+    help="One target. Repeat the option for more targets.",
 )
 @click.option(
     "--input",
@@ -287,11 +357,13 @@ def watch_command(
     "--until",
     type=click.Choice(PIPELINE_STATUSES),
     default="failed",
-    show_default=True,
     help="Status for CLI pipeline targets. JSON targets set their own status.",
 )
 @click.option(
-    "--interval", type=click.FloatRange(min=0.1), default=15.0, show_default=True
+    "--interval",
+    type=click.FloatRange(min=0.1),
+    default=15.0,
+    help="Seconds between polls.",
 )
 @click.option(
     "--timeout",
@@ -306,7 +378,11 @@ def watch_command(
 def watch_many_command(
     client, target, input_file, until, interval, timeout, follow, query
 ):
-    """Watch several resources in one process."""
+    """Watch several resources in one process.
+
+    Each event names its kind, project and resource. Without --follow, the
+    command exits after the first event from any target.
+    """
     targets = [
         WatchTarget(kind=kind, project=project, resource=resource, until=until)
         for kind, project, resource in target
@@ -328,7 +404,7 @@ def watch_many_command(
         raise click.ClickException(str(error)) from error
 
 
-@main.command()
+@main.command(epilog=TARGET_HELP + EXIT_HELP)
 @click.argument(
     "kind",
     type=click.Choice(WATCH_KINDS),
@@ -338,7 +414,10 @@ def watch_many_command(
 @click.option("--query", help="Select output fields with a JMESPath expression.")
 @click.pass_obj
 def inspect(client, kind, project, resource, query):
-    """Read one current resource snapshot without a watch."""
+    """Read one current resource snapshot without a watch.
+
+    Comment kinds print an object of notes keyed by note id.
+    """
     try:
         emit(snapshot(client, kind, project, resource), parse_query(query))
     except MonitorError as error:
