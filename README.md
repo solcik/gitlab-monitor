@@ -31,6 +31,43 @@ Every watch supports `--interval`, `--timeout`, and `--follow`.
 Timeout exits with code 124. API errors exit with code 1.
 `inspect` prints a current snapshot without waiting.
 
+Use `watch-many` to watch several targets in one process. Repeat `--target` for CLI input:
+
+```sh
+gitlab-monitor watch-many \
+  --target issue-comments 171 1373 \
+  --target mr-feedback 171 350 \
+  --target pipeline 171 32147
+```
+
+Use `--input FILE` for a JSON array. Use `--input -` to read standard input.
+You can combine `--input` with repeated `--target` options.
+
+```json
+[
+  {"kind": "issue-comments", "project": 171, "resource": 1373},
+  {"kind": "pipeline", "project": 171, "resource": 32147, "until": "success"}
+]
+```
+
+Each output line identifies its `kind`, `project`, and `resource`.
+The default command exits after the first matching event across all targets.
+Use `--follow` to keep reporting later events from every target.
+`--interval` and `--timeout` apply to the whole watch process.
+JSON targets accept `until` for pipeline status. `--until` sets the status for CLI pipeline targets.
+
+Use `--query` to select the JSON output with a JMESPath expression.
+The option works with `watch`, `watch-many`, and `inspect`.
+The default output keeps the full event, including comment text.
+
+```sh
+gitlab-monitor watch-many \
+  --target pipeline 171 32147 \
+  --query '{event: event, project: project, resource: resource, status: status}'
+```
+
+The example emits `{"event":"pipeline","project":"171","resource":"32147","status":"failed"}`.
+
 The CLI does not install a service or store a persistent baseline.
 It does not post comments or change GitLab resources.
 

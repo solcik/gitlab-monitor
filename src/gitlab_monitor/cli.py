@@ -4,10 +4,47 @@ import json
 import subprocess
 import time
 from dataclasses import dataclass
+from typing import Literal, get_args
 from urllib.parse import quote
 
 import click
 import gitlab
+import jmespath
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+
+WatchKind = Literal[
+    "issue-comments", "mr-feedback", "mr-conflicts", "mr-approvals", "pipeline"
+]
+PipelineStatus = Literal["failed", "success", "canceled", "skipped"]
+WATCH_KINDS = get_args(WatchKind)
+PIPELINE_STATUSES = get_args(PipelineStatus)
+
+
+class WatchTarget(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", str_min_length=1, coerce_numbers_to_str=True
+    )
+
+    kind: WatchKind
+    project: str
+    resource: str
+    until: PipelineStatus = "failed"
+
+
+TARGETS = TypeAdapter(list[WatchTarget])
+
+
+def parse_query(value):
+    if value is None:
+        return None
+    try:
+        return jmespath.compile(value)
+    except jmespath.exceptions.JMESPathError as error:
+        raise click.BadParameter(str(error), param_hint="--query") from error
+
+
+def emit(value, query):
+    click.echo(json.dumps(query.search(value) if query else value, sort_keys=True))
 
 
 class MonitorError(Exception):
@@ -145,20 +182,28 @@ def events(kind: str, before, after, until: str, *, initial: bool):
     return []
 
 
-def watch(client, kind, project, resource, until, interval, timeout, follow):
+def watch_many(client, targets, interval, timeout, follow, query=None):
     start = time.monotonic()
-    before = None
+    previous = [None] * len(targets)
     while True:
-        after = snapshot(client, kind, project, resource)
-        for event in events(kind, before, after, until, initial=before is None):
-            click.echo(
-                json.dumps(
-                    {"project": project, "resource": resource, **event}, sort_keys=True
+        for index, target in enumerate(targets):
+            before = previous[index]
+            after = snapshot(client, target.kind, target.project, target.resource)
+            for event in events(
+                target.kind, before, after, target.until, initial=before is None
+            ):
+                emit(
+                    {
+                        "kind": target.kind,
+                        "project": target.project,
+                        "resource": target.resource,
+                        **event,
+                    },
+                    query,
                 )
-            )
-            if not follow:
-                return
-        before = after
+                if not follow:
+                    return
+            previous[index] = after
         if timeout is not None and time.monotonic() - start >= timeout:
             raise click.exceptions.Exit(124)
         time.sleep(interval)
@@ -191,15 +236,13 @@ def main(ctx, url, token, glab_bin):
 @main.command()
 @click.argument(
     "kind",
-    type=click.Choice(
-        ["issue-comments", "mr-feedback", "mr-conflicts", "mr-approvals", "pipeline"]
-    ),
+    type=click.Choice(WATCH_KINDS),
 )
 @click.argument("project")
 @click.argument("resource")
 @click.option(
     "--until",
-    type=click.Choice(["failed", "success", "canceled", "skipped"]),
+    type=click.Choice(PIPELINE_STATUSES),
     default="failed",
     show_default=True,
 )
@@ -214,11 +257,73 @@ def main(ctx, url, token, glab_bin):
 @click.option(
     "--follow", is_flag=True, help="Emit later events until stopped or timed out."
 )
+@click.option("--query", help="Select output fields with a JMESPath expression.")
 @click.pass_obj
-def watch_command(client, kind, project, resource, until, interval, timeout, follow):
+def watch_command(
+    client, kind, project, resource, until, interval, timeout, follow, query
+):
     """Emit JSON when a matching event occurs."""
     try:
-        watch(client, kind, project, resource, until, interval, timeout, follow)
+        target = WatchTarget(kind=kind, project=project, resource=resource, until=until)
+        watch_many(client, [target], interval, timeout, follow, parse_query(query))
+    except MonitorError as error:
+        raise click.ClickException(str(error)) from error
+
+
+@main.command("watch-many")
+@click.option(
+    "--target",
+    type=(click.Choice(WATCH_KINDS), str, str),
+    multiple=True,
+    help="Repeat with KIND PROJECT RESOURCE.",
+)
+@click.option(
+    "--input",
+    "input_file",
+    type=click.File("r"),
+    help="Read a JSON array of targets from a file or stdin (-).",
+)
+@click.option(
+    "--until",
+    type=click.Choice(PIPELINE_STATUSES),
+    default="failed",
+    show_default=True,
+    help="Status for CLI pipeline targets. JSON targets set their own status.",
+)
+@click.option(
+    "--interval", type=click.FloatRange(min=0.1), default=15.0, show_default=True
+)
+@click.option(
+    "--timeout",
+    type=click.FloatRange(min=0),
+    help="Stop after this many seconds with exit code 124.",
+)
+@click.option(
+    "--follow", is_flag=True, help="Emit later events until stopped or timed out."
+)
+@click.option("--query", help="Select output fields with a JMESPath expression.")
+@click.pass_obj
+def watch_many_command(
+    client, target, input_file, until, interval, timeout, follow, query
+):
+    """Watch several resources in one process."""
+    targets = [
+        WatchTarget(kind=kind, project=project, resource=resource, until=until)
+        for kind, project, resource in target
+    ]
+    if input_file is not None:
+        try:
+            targets.extend(TARGETS.validate_json(input_file.read()))
+        except ValidationError as error:
+            details = "; ".join(
+                f"{'.'.join(map(str, item['loc'])) or 'JSON'}: {item['msg']}"
+                for item in error.errors(include_input=False)
+            )
+            raise click.BadParameter(details, param_hint="--input") from error
+    if not targets:
+        raise click.UsageError("Give at least one --target or --input target.")
+    try:
+        watch_many(client, targets, interval, timeout, follow, parse_query(query))
     except MonitorError as error:
         raise click.ClickException(str(error)) from error
 
@@ -226,18 +331,15 @@ def watch_command(client, kind, project, resource, until, interval, timeout, fol
 @main.command()
 @click.argument(
     "kind",
-    type=click.Choice(
-        ["issue-comments", "mr-feedback", "mr-conflicts", "mr-approvals", "pipeline"]
-    ),
+    type=click.Choice(WATCH_KINDS),
 )
 @click.argument("project")
 @click.argument("resource")
+@click.option("--query", help="Select output fields with a JMESPath expression.")
 @click.pass_obj
-def inspect(client, kind, project, resource):
+def inspect(client, kind, project, resource, query):
     """Read one current resource snapshot without a watch."""
     try:
-        click.echo(
-            json.dumps(snapshot(client, kind, project, resource), sort_keys=True)
-        )
+        emit(snapshot(client, kind, project, resource), parse_query(query))
     except MonitorError as error:
         raise click.ClickException(str(error)) from error

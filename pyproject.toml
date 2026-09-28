@@ -9,7 +9,7 @@ description = "On-demand GitLab event watches for coding agents"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
-dependencies = ["click>=8.1,<9", "python-gitlab>=6,<9"]
+dependencies = ["click>=8.1,<9", "jmespath>=1,<2", "pydantic>=2,<3", "python-gitlab>=6,<9"]
 
 [project.optional-dependencies]
 test = ["pytest>=8,<10"]
