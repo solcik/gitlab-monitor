@@ -223,3 +223,16 @@ def test_token_uses_python_gitlab(monkeypatch):
     )
     assert result.exit_code == 0
     assert calls == [("https://git.example.org", "test-token")]
+
+
+def test_version_option():
+    result = CliRunner().invoke(cli.main, ["--version"])
+    assert result.exit_code == 0
+    assert "version" in result.output
+
+
+def test_watch_help_explains_kinds_and_exit_codes():
+    result = CliRunner().invoke(cli.main, ["watch", "--help"])
+    assert result.exit_code == 0
+    assert "mr-feedback     new human note" in result.output
+    assert "124  --timeout expired" in result.output

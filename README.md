@@ -13,6 +13,8 @@ The command uses `glab` authentication by default. Set `--glab-bin glab-agent` o
 Set `--url https://git.vs-point.cz` for a self-hosted GitLab instance.
 Alternatively, set `GITLAB_TOKEN` to use the `python-gitlab` client.
 Use `--token` for a direct token argument when process listings are acceptable.
+`GITLAB_URL` and `GITLAB_MONITOR_GLAB_BIN` set the `--url` and `--glab-bin` defaults.
+`gitlab-monitor --help` lists every kind and exit code. `--version` prints the version.
 The client interface has the same `get` method for both transports.
 
 ## Watch
