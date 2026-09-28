@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/solcik/gitlab-monitor/compare/v0.2.1...v0.3.0) (2026-09-28)
+
+
+### Features
+
+* document kinds, output and exit codes in --help ([#8](https://github.com/solcik/gitlab-monitor/issues/8)) ([7c677c9](https://github.com/solcik/gitlab-monitor/commit/7c677c9761f6b34a704f70d4ea77095253d1f0d5))
+
 ## [0.2.1](https://github.com/solcik/gitlab-monitor/compare/v0.2.0...v0.2.1) (2026-09-28)
 
 
