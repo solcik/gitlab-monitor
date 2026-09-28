@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/solcik/gitlab-monitor/compare/v0.2.0...v0.2.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **ci:** name repository for release checks ([#6](https://github.com/solcik/gitlab-monitor/issues/6)) ([60fb8bd](https://github.com/solcik/gitlab-monitor/commit/60fb8bd7ef162b09489316cdac50f5830e2ece12))
+
 ## [0.2.0](https://github.com/solcik/gitlab-monitor/compare/v0.1.0...v0.2.0) (2026-09-28)
 
 
