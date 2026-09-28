@@ -37,8 +37,8 @@ It does not post comments or change GitLab resources.
 ## Development
 
 Run `direnv allow` once. Then enter the project environment with `direnv exec .`.
-Run `heavy direnv exec . pytest` for tests.
-Run `heavy direnv exec . ruff check .` for lint.
+Run `direnv exec . devenv test` for lint, workflow checks, tests, and the wheel build.
+Run `direnv exec . devenv tasks run quality:lint` for lint only.
 
 Release Please creates release pull requests, updates `CHANGELOG.md`, and tags releases.
 Use Conventional Commit titles. The workflow uses one release and changelog engine.
