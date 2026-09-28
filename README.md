@@ -24,11 +24,17 @@ gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent watch issue-c
 gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent watch mr-feedback 171 350
 gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent watch mr-conflicts 171 350
 gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent watch mr-approvals 171 350
+gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent watch mr-state 171 350
+gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent watch mr-pipeline 171 350 --until success
 gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent watch pipeline 171 32147 --until success
 ```
 
+`mr-state` reports when the MR is merged or closed.
+`mr-pipeline` reads the MR head pipeline on every poll.
+After a push, it follows the new pipeline. `pipeline` stays on one pipeline id.
+
 Issue and MR comment watches start from the current note set. They report new human comments.
-Conflict, approval, and pipeline watches report a matching current state immediately.
+State and pipeline watches report a matching current state immediately.
 Every watch supports `--interval`, `--timeout`, and `--follow`.
 Timeout exits with code 124. API errors exit with code 1.
 `inspect` prints a current snapshot without waiting.
@@ -57,6 +63,7 @@ The default command exits after the first matching event across all targets.
 Use `--follow` to keep reporting later events from every target.
 `--interval` and `--timeout` apply to the whole watch process.
 JSON targets accept `until` for pipeline status. `--until` sets the status for CLI pipeline targets.
+`until` applies to `pipeline` and `mr-pipeline` targets.
 
 Use `--query` to select the JSON output with a JMESPath expression.
 The option works with `watch`, `watch-many`, and `inspect`.

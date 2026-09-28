@@ -14,11 +14,18 @@ import jmespath
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 WatchKind = Literal[
-    "issue-comments", "mr-feedback", "mr-conflicts", "mr-approvals", "pipeline"
+    "issue-comments",
+    "mr-feedback",
+    "mr-conflicts",
+    "mr-approvals",
+    "mr-state",
+    "mr-pipeline",
+    "pipeline",
 ]
 PipelineStatus = Literal["failed", "success", "canceled", "skipped"]
 WATCH_KINDS = get_args(WatchKind)
 PIPELINE_STATUSES = get_args(PipelineStatus)
+MR_FINAL_STATES = ("merged", "closed")
 
 
 class WatchTarget(BaseModel):
@@ -46,6 +53,9 @@ KIND selects the event. RESOURCE is the IID or id that KIND names:
   mr-feedback     new human note or thread reply on MR IID
   mr-conflicts    MR IID has merge conflicts
   mr-approvals    MR IID becomes approved
+  mr-state        MR IID is merged or closed
+  mr-pipeline     head pipeline of MR IID reaches the --until status;
+                  after a push, the watch follows the new pipeline
   pipeline        pipeline id reaches the --until status
 PROJECT is a numeric project id or a full path such as group/repo.
 """
@@ -152,6 +162,15 @@ def snapshot(client, kind: str, project: str, resource: str):
             "status": mr.get("detailed_merge_status"),
             "url": mr.get("web_url"),
         }
+    if kind == "mr-state":
+        return {"state": mr.get("state"), "url": mr.get("web_url")}
+    if kind == "mr-pipeline":
+        pipeline = mr.get("head_pipeline") or {}
+        return {
+            "pipeline": pipeline.get("id"),
+            "status": pipeline.get("status"),
+            "url": pipeline.get("web_url") or mr.get("web_url"),
+        }
     if kind == "mr-approvals":
         approval_path = f"{path}/approvals"
         approvals = require_object(client.get(approval_path), approval_path)
@@ -194,6 +213,20 @@ def events(kind: str, before, after, until: str, *, initial: bool):
         status = after["status"]
         if status == until and (initial or before["status"] != status):
             return [{"event": "pipeline", **after}]
+    if kind == "mr-pipeline":
+        status = after["status"]
+        if status == until and (
+            initial
+            or before["pipeline"] != after["pipeline"]
+            or before["status"] != status
+        ):
+            return [{"event": "pipeline", **after}]
+    if (
+        kind == "mr-state"
+        and after["state"] in MR_FINAL_STATES
+        and (initial or before["state"] != after["state"])
+    ):
+        return [{"event": "mr-state", **after}]
     if (
         kind == "mr-conflicts"
         and after["conflicts"]
@@ -296,7 +329,7 @@ def main(ctx, url, token, glab_bin):
     "--until",
     type=click.Choice(PIPELINE_STATUSES),
     default="failed",
-    help="Pipeline status to wait for. Other kinds ignore it.",
+    help="Pipeline status for pipeline and mr-pipeline. Other kinds ignore it.",
 )
 @click.option(
     "--interval",
@@ -357,7 +390,7 @@ The --input JSON is an array of targets:
     "--until",
     type=click.Choice(PIPELINE_STATUSES),
     default="failed",
-    help="Status for CLI pipeline targets. JSON targets set their own status.",
+    help="Status for CLI pipeline and mr-pipeline targets. JSON sets its own.",
 )
 @click.option(
     "--interval",
