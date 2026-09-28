@@ -42,3 +42,4 @@ Run `direnv exec . devenv tasks run quality:lint` for lint only.
 
 Release Please creates release pull requests, updates `CHANGELOG.md`, and tags releases.
 Use Conventional Commit titles. The workflow uses one release and changelog engine.
+Dependabot checks GitHub Actions for new releases each week.
