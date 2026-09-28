@@ -1,0 +1,8 @@
+.devenv/
+.direnv/
+.pytest_cache/
+.ruff_cache/
+.pre-commit-config.yaml
+__pycache__/
+*.egg-info/
+dist/

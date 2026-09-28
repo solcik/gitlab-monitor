@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "gitlab-agent-monitor"
+version = "0.1.0"
+description = "On-demand GitLab event watches for coding agents"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = ["click>=8.1,<9", "python-gitlab>=6,<8"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+gitlab-monitor = "gitlab_monitor.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gitlab_monitor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 88
