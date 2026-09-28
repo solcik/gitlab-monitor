@@ -1,5 +1,5 @@
 {pkgs, ...}: let
-  python = pkgs.python3.withPackages (ps: [ps.click ps.python-gitlab ps.pytest ps.ruff ps.hatchling ps.build]);
+  python = pkgs.python3.withPackages (ps: [ps.click ps.jmespath ps.pydantic ps.python-gitlab ps.pytest ps.ruff ps.hatchling ps.build]);
 in {
   packages = [python pkgs.git pkgs.committed pkgs.actionlint pkgs.alejandra];
   git-hooks.hooks.committed = {

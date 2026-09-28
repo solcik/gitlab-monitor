@@ -66,6 +66,106 @@ def test_timeout_returns_124(monkeypatch):
     assert result.exit_code == 124
 
 
+def test_watch_many_checks_repeated_targets(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "GlabClient",
+        lambda *args: Client(
+            [[], {"status": "failed", "web_url": "https://example/p"}]
+        ),
+    )
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "watch-many",
+            "--target",
+            "issue-comments",
+            "171",
+            "4",
+            "--target",
+            "pipeline",
+            "171",
+            "12",
+        ],
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "event": "pipeline",
+        "kind": "pipeline",
+        "project": "171",
+        "resource": "12",
+        "status": "failed",
+        "url": "https://example/p",
+    }
+
+
+def test_watch_many_reads_json_from_stdin(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "GlabClient",
+        lambda *args: Client([{"status": "success", "web_url": "https://example/p"}]),
+    )
+    result = CliRunner().invoke(
+        cli.main,
+        ["watch-many", "--input", "-"],
+        input='[{"kind":"pipeline","project":171,"resource":12,"until":"success"}]',
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output)["status"] == "success"
+    assert json.loads(result.output)["project"] == "171"
+
+
+def test_watch_many_selects_concise_output(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "GlabClient",
+        lambda *args: Client([{"status": "failed", "web_url": "https://example/p"}]),
+    )
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "watch-many",
+            "--target",
+            "pipeline",
+            "171",
+            "12",
+            "--query",
+            "{event: event, status: status, resource: resource}",
+        ],
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "event": "pipeline",
+        "resource": "12",
+        "status": "failed",
+    }
+
+
+def test_watch_rejects_invalid_query():
+    result = CliRunner().invoke(
+        cli.main,
+        ["watch", "pipeline", "171", "12", "--query", "["],
+    )
+    assert result.exit_code == 2
+    assert "--query" in result.output
+
+
+def test_watch_many_rejects_invalid_input():
+    result = CliRunner().invoke(
+        cli.main,
+        ["watch-many", "--input", "-"],
+        input='[{"kind":"pipeline","project":"171","resource":"12","token":"secret"}]',
+    )
+    assert result.exit_code == 2
+    assert "Extra inputs are not permitted" in result.output
+
+
+def test_watch_many_requires_a_target():
+    result = CliRunner().invoke(cli.main, ["watch-many"])
+    assert result.exit_code == 2
+    assert "at least one" in result.output
+
+
 def test_glab_binary_override(monkeypatch):
     calls = []
 
