@@ -236,3 +236,92 @@ def test_watch_help_explains_kinds_and_exit_codes():
     assert result.exit_code == 0
     assert "mr-feedback     new human note" in result.output
     assert "124  --timeout expired" in result.output
+
+
+def test_mr_state_waits_for_merge(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "GlabClient",
+        lambda *args: Client(
+            [
+                {"state": "opened", "web_url": "https://example/mr"},
+                {"state": "merged", "web_url": "https://example/mr"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    result = CliRunner().invoke(cli.main, ["watch", "mr-state", "171", "350"])
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "event": "mr-state",
+        "kind": "mr-state",
+        "project": "171",
+        "resource": "350",
+        "state": "merged",
+        "url": "https://example/mr",
+    }
+
+
+def test_mr_state_reports_current_close(monkeypatch):
+    monkeypatch.setattr(cli, "GlabClient", lambda *args: Client([{"state": "closed"}]))
+    result = CliRunner().invoke(cli.main, ["watch", "mr-state", "171", "350"])
+    assert result.exit_code == 0
+    assert json.loads(result.output)["state"] == "closed"
+
+
+def mr(pipeline, status):
+    return {
+        "web_url": "https://example/mr",
+        "head_pipeline": {
+            "id": pipeline,
+            "status": status,
+            "web_url": f"https://example/p/{pipeline}",
+        },
+    }
+
+
+def test_mr_pipeline_follows_new_head_pipeline(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "GlabClient",
+        lambda *args: Client([mr(10, "running"), mr(11, "running"), mr(11, "success")]),
+    )
+    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    result = CliRunner().invoke(
+        cli.main, ["watch", "mr-pipeline", "171", "350", "--until", "success"]
+    )
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {
+        "event": "pipeline",
+        "kind": "mr-pipeline",
+        "project": "171",
+        "resource": "350",
+        "pipeline": 11,
+        "status": "success",
+        "url": "https://example/p/11",
+    }
+
+
+def test_mr_pipeline_reports_repeated_status_on_new_pipeline(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "GlabClient",
+        lambda *args: Client([mr(10, "failed"), mr(10, "failed"), mr(11, "failed")]),
+    )
+    monkeypatch.setattr(cli.time, "sleep", lambda _: None)
+    result = CliRunner().invoke(
+        cli.main,
+        ["watch", "mr-pipeline", "171", "350", "--follow", "--timeout", "0.5"],
+    )
+    pipelines = [json.loads(line)["pipeline"] for line in result.output.splitlines()]
+    assert pipelines == [10, 11]
+
+
+def test_mr_pipeline_without_head_pipeline_waits(monkeypatch):
+    monkeypatch.setattr(
+        cli, "GlabClient", lambda *args: Client([{"head_pipeline": None}])
+    )
+    result = CliRunner().invoke(
+        cli.main, ["watch", "mr-pipeline", "171", "350", "--timeout", "0"]
+    )
+    assert result.exit_code == 124
