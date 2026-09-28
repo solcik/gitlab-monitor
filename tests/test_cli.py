@@ -64,3 +64,62 @@ def test_timeout_returns_124(monkeypatch):
         cli.main, ["watch", "pipeline", "171", "12", "--timeout", "0"]
     )
     assert result.exit_code == 124
+
+
+def test_glab_binary_override(monkeypatch):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return type("Result", (), {"stdout": '{"status":"success"}'})()
+
+    monkeypatch.setattr(cli.subprocess, "run", run)
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "--url",
+            "https://git.example.org",
+            "--glab-bin",
+            "/bin/glab-agent",
+            "inspect",
+            "pipeline",
+            "171",
+            "12",
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls[0][:5] == [
+        "/bin/glab-agent",
+        "api",
+        "--hostname",
+        "git.example.org",
+        "--method",
+    ]
+
+
+def test_token_uses_python_gitlab(monkeypatch):
+    calls = []
+
+    class GitLab:
+        def __init__(self, url, private_token):
+            calls.append((url, private_token))
+
+        def http_get(self, path):
+            return {"status": "success"}
+
+    monkeypatch.setattr(cli.gitlab, "Gitlab", GitLab)
+    result = CliRunner().invoke(
+        cli.main,
+        [
+            "--url",
+            "https://git.example.org",
+            "--token",
+            "test-token",
+            "inspect",
+            "pipeline",
+            "171",
+            "12",
+        ],
+    )
+    assert result.exit_code == 0
+    assert calls == [("https://git.example.org", "test-token")]
