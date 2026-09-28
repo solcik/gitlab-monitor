@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/solcik/gitlab-monitor/compare/v0.3.0...v0.4.0) (2026-09-28)
+
+
+### Features
+
+* add mr-state and mr-pipeline watch kinds ([#10](https://github.com/solcik/gitlab-monitor/issues/10)) ([38e806d](https://github.com/solcik/gitlab-monitor/commit/38e806d269eb8ae16ea8ce8aecb9037037a25f73))
+
 ## [0.3.0](https://github.com/solcik/gitlab-monitor/compare/v0.2.1...v0.3.0) (2026-09-28)
 
 
