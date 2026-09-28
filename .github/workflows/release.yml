@@ -3,12 +3,21 @@ on:
   push:
     branches: [main]
 permissions:
+  actions: write
   contents: write
+  issues: write
   pull-requests: write
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v5.0.0
+        id: release
         with:
           release-type: python
+      - name: Check release pull request
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_BRANCH: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+        run: gh workflow run checks.yml --ref "$RELEASE_BRANCH"
