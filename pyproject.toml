@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "gitlab-agent-monitor"
-version = "0.1.0"
+version = "0.2.0"
 description = "On-demand GitLab event watches for coding agents"
 readme = "README.md"
 license = "MIT"

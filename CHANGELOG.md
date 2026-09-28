@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/solcik/gitlab-monitor/compare/v0.1.0...v0.2.0) (2026-09-28)
+
+
+### Features
+
+* watch multiple GitLab targets with selected output ([#4](https://github.com/solcik/gitlab-monitor/issues/4)) ([c68bcec](https://github.com/solcik/gitlab-monitor/commit/c68bcec819b3d7b801cb736660a5083c4783e0af))
+
 ## 0.1.0 (2026-09-28)
 
 
