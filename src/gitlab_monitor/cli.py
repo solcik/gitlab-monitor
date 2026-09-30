@@ -11,13 +11,24 @@ from urllib.parse import quote
 import click
 import gitlab
 import jmespath
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+)
+
+from .jobs import job_events, job_snapshot, utc_now
 
 WatchKind = Literal[
     "issue-comments",
     "mr-feedback",
     "mr-conflicts",
     "mr-approvals",
+    "pipeline-jobs",
+    "mr-jobs",
     "mr-state",
     "mr-pipeline",
     "pipeline",
@@ -37,6 +48,19 @@ class WatchTarget(BaseModel):
     project: str
     resource: str
     until: PipelineStatus = "failed"
+    duration_budgets: dict[str, float] = Field(default_factory=dict)
+    wait_budgets: dict[str, float] = Field(default_factory=dict)
+    baseline_samples: int = Field(default=0, ge=0)
+    baseline_multiplier: float = Field(default=1.5, gt=0, allow_inf_nan=False)
+
+    @field_validator("duration_budgets", "wait_budgets")
+    @classmethod
+    def validate_budgets(cls, budgets):
+        import math
+
+        if any(not math.isfinite(value) or value <= 0 for value in budgets.values()):
+            raise ValueError("Budgets must contain positive finite seconds.")
+        return budgets
 
 
 TARGETS = TypeAdapter(list[WatchTarget])
@@ -56,6 +80,8 @@ KIND selects the event. RESOURCE is the IID or id that KIND names:
   mr-state        MR IID is merged or closed
   mr-pipeline     head pipeline of MR IID reaches the --until status;
                   after a push, the watch follows the new pipeline
+  pipeline-jobs   all job attempts in pipeline id
+  mr-jobs         all job attempts in the current MR head pipeline
   pipeline        pipeline id reaches the --until status
 PROJECT is a numeric project id or a full path such as group/repo.
 """
@@ -140,8 +166,24 @@ def require_list(value, path):
     return value
 
 
-def snapshot(client, kind: str, project: str, resource: str):
+def snapshot(
+    client, kind: str, project: str, resource: str, *, policy=None, cache=None, now=None
+):
     base = project_path(project)
+    if kind in ("pipeline-jobs", "mr-jobs"):
+        policy = policy or WatchTarget(kind=kind, project=project, resource=resource)
+        try:
+            return job_snapshot(
+                client,
+                base,
+                kind,
+                resource,
+                policy,
+                cache if cache is not None else {},
+                now if now is not None else utc_now(),
+            )
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise MonitorError(f"Invalid job response: {error}") from error
     if kind == "pipeline":
         path = f"{base}/pipelines/{resource}"
         pipeline = require_object(client.get(path), path)
@@ -242,16 +284,45 @@ def events(kind: str, before, after, until: str, *, initial: bool):
     return []
 
 
-def watch_many(client, targets, interval, timeout, follow, query=None):
-    start = time.monotonic()
+def watch_many(
+    client,
+    targets,
+    interval,
+    timeout,
+    follow,
+    query=None,
+    *,
+    now=utc_now,
+    monotonic=None,
+    sleep=None,
+):
+    monotonic = monotonic or time.monotonic
+    sleep = sleep or time.sleep
+    start = monotonic()
     previous = [None] * len(targets)
+    alerted = [set() for _ in targets]
+    cache = {}
     while True:
         for index, target in enumerate(targets):
             before = previous[index]
-            after = snapshot(client, target.kind, target.project, target.resource)
-            for event in events(
-                target.kind, before, after, target.until, initial=before is None
-            ):
+            is_jobs = target.kind in ("pipeline-jobs", "mr-jobs")
+            after = snapshot(
+                client,
+                target.kind,
+                target.project,
+                target.resource,
+                policy=target,
+                cache=cache,
+                now=now(),
+            )
+            found = (
+                job_events(before, after, alerted[index])
+                if is_jobs
+                else events(
+                    target.kind, before, after, target.until, initial=before is None
+                )
+            )
+            for event in found:
                 emit(
                     {
                         "kind": target.kind,
@@ -261,12 +332,14 @@ def watch_many(client, targets, interval, timeout, follow, query=None):
                     },
                     query,
                 )
-                if not follow:
+                if not follow and not is_jobs:
                     return
+            if found and not follow:
+                return
             previous[index] = after
-        if timeout is not None and time.monotonic() - start >= timeout:
+        if timeout is not None and monotonic() - start >= timeout:
             raise click.exceptions.Exit(124)
-        time.sleep(interval)
+        sleep(interval)
 
 
 @click.group(context_settings={"show_default": True})
@@ -318,6 +391,65 @@ def main(ctx, url, token, glab_bin):
         ctx.obj = GlabClient(glab_bin, host)
 
 
+def job_options(command):
+    for option in (
+        click.option(
+            "--duration-budget",
+            multiple=True,
+            metavar="NAME=SECONDS",
+            help="Execution limit per job name. Use * for all names.",
+        ),
+        click.option(
+            "--wait-budget",
+            multiple=True,
+            metavar="NAME=SECONDS",
+            help="Pre-start limit per job name. Use * for all names.",
+        ),
+        click.option(
+            "--baseline-samples",
+            type=click.IntRange(min=0),
+            default=0,
+            help="Recent pipelines on the same ref. Only successful jobs supply samples.",
+        ),
+        click.option(
+            "--baseline-multiplier",
+            type=click.FloatRange(min=0, min_open=True),
+            default=1.5,
+            help="Historical median multiplier for jobs without explicit limits.",
+        ),
+    ):
+        command = option(command)
+    return command
+
+
+def job_policy(duration_budget, wait_budget, baseline_samples, baseline_multiplier):
+    def parse(values):
+        result = {}
+        for value in values:
+            try:
+                name, seconds = value.rsplit("=", 1)
+                if not name:
+                    raise ValueError
+                result[name] = float(seconds)
+            except ValueError as error:
+                raise click.BadParameter("Use NAME=SECONDS for each budget.") from error
+        try:
+            return WatchTarget.validate_budgets(result)
+        except ValueError as error:
+            raise click.BadParameter(str(error)) from error
+
+    import math
+
+    if not math.isfinite(baseline_multiplier):
+        raise click.BadParameter("The baseline multiplier must be finite.")
+    return {
+        "duration_budgets": parse(duration_budget),
+        "wait_budgets": parse(wait_budget),
+        "baseline_samples": baseline_samples,
+        "baseline_multiplier": baseline_multiplier,
+    }
+
+
 @main.command(epilog=TARGET_HELP + EXIT_HELP)
 @click.argument(
     "kind",
@@ -346,9 +478,10 @@ def main(ctx, url, token, glab_bin):
     "--follow", is_flag=True, help="Emit later events until stopped or timed out."
 )
 @click.option("--query", help="Select output fields with a JMESPath expression.")
+@job_options
 @click.pass_obj
 def watch_command(
-    client, kind, project, resource, until, interval, timeout, follow, query
+    client, kind, project, resource, until, interval, timeout, follow, query, **options
 ):
     """Emit JSON when a matching event occurs.
 
@@ -356,7 +489,13 @@ def watch_command(
     State watches report a matching current state at once.
     """
     try:
-        target = WatchTarget(kind=kind, project=project, resource=resource, until=until)
+        target = WatchTarget(
+            kind=kind,
+            project=project,
+            resource=resource,
+            until=until,
+            **job_policy(**options),
+        )
         watch_many(client, [target], interval, timeout, follow, parse_query(query))
     except MonitorError as error:
         raise click.ClickException(str(error)) from error
@@ -407,17 +546,21 @@ The --input JSON is an array of targets:
     "--follow", is_flag=True, help="Emit later events until stopped or timed out."
 )
 @click.option("--query", help="Select output fields with a JMESPath expression.")
+@job_options
 @click.pass_obj
 def watch_many_command(
-    client, target, input_file, until, interval, timeout, follow, query
+    client, target, input_file, until, interval, timeout, follow, query, **options
 ):
     """Watch several resources in one process.
 
     Each event names its kind, project and resource. Without --follow, the
     command exits after the first event from any target.
     """
+    policy = job_policy(**options)
     targets = [
-        WatchTarget(kind=kind, project=project, resource=resource, until=until)
+        WatchTarget(
+            kind=kind, project=project, resource=resource, until=until, **policy
+        )
         for kind, project, resource in target
     ]
     if input_file is not None:
@@ -445,13 +588,19 @@ def watch_many_command(
 @click.argument("project")
 @click.argument("resource")
 @click.option("--query", help="Select output fields with a JMESPath expression.")
+@job_options
 @click.pass_obj
-def inspect(client, kind, project, resource, query):
+def inspect(client, kind, project, resource, query, **options):
     """Read one current resource snapshot without a watch.
 
     Comment kinds print an object of notes keyed by note id.
     """
     try:
-        emit(snapshot(client, kind, project, resource), parse_query(query))
+        policy = WatchTarget(
+            kind=kind, project=project, resource=resource, **job_policy(**options)
+        )
+        emit(
+            snapshot(client, kind, project, resource, policy=policy), parse_query(query)
+        )
     except MonitorError as error:
         raise click.ClickException(str(error)) from error

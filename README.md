@@ -89,3 +89,114 @@ Run `direnv exec . devenv tasks run quality:lint` for lint only.
 Release Please creates release pull requests, updates `CHANGELOG.md`, and tags releases.
 Use Conventional Commit titles. The workflow uses one release and changelog engine.
 Dependabot checks GitHub Actions for new releases each week.
+
+## Job attempts and duration alerts
+
+Use `pipeline-jobs` for one pipeline. Use `mr-jobs` for the current MR head pipeline.
+Each snapshot includes all job attempts, including retries, manual jobs, and skipped jobs.
+The client requests every API page. The client does not request job traces.
+
+```sh
+gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent \
+  inspect pipeline-jobs 237 40736
+
+gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent \
+  watch mr-jobs 237 225 --follow --interval 15 --timeout 3600 \
+  --duration-budget 'verify:apps-parents=250' \
+  --duration-budget 'verify:packages-domain=300' \
+  --wait-budget '*=900'
+```
+
+Job watches emit the current job states on the first poll.
+Without `--follow`, the command emits that poll's events and exits.
+With `--follow`, the command emits later state changes and duration overruns.
+`--until` does not filter job events.
+
+The events are `job-started`, `job-finished`, `job-failed`, `job-state`, and `job-overrun`.
+Only the `failed` status emits `job-failed`.
+Failures appear before other job events, even when the pipeline remains active.
+The event preserves `allow_failure` and `failure_reason`.
+Manual, pending, scheduled, preparation, and resource-wait states emit `job-state`.
+Success, cancellation, and skipped states emit `job-finished`.
+A poll cannot detect intermediate states that finish between requests.
+
+An MR watch resolves the head pipeline on every poll.
+A head change emits `job-pipeline-changed` with the old and new pipeline IDs.
+Each job event includes its pipeline ID.
+The watch compares job states within their pipeline.
+A missing head pipeline produces an empty snapshot.
+The watch stops tracking the predecessor after a head change.
+
+`execution_seconds` measures job execution.
+`pre_start_seconds` measures the time from creation until execution starts.
+Pre-start time includes dependency waits, manual waits, and resource waits.
+`queued_seconds` preserves GitLab's separate runner queue measurement.
+Completed execution uses GitLab's duration when available.
+Otherwise, timestamps supply the duration.
+Active execution and waits use the injected observation clock.
+The source fields identify `api`, `timestamps`, or `observed_elapsed` measurements.
+Missing measurements remain `null`.
+Unstarted terminal jobs without a finish timestamp have an unknown pre-start duration.
+Job IDs identify retry attempts. `attempt` numbers attempts within each name and stage.
+
+Budgets use seconds. Repeat each option for separate job names.
+Use `*=SECONDS` to set a fallback budget for all names.
+An exact name overrides the fallback.
+`--duration-budget` limits execution. `--wait-budget` limits pre-start time.
+A measured duration above its budget emits `job-overrun`.
+Each watch emits at most one overrun alert per job ID and pipeline.
+The alert includes every exceeded budget at that observation.
+A retry gets its own alert allowance.
+A new process starts a new alert allowance.
+The monitor does not cancel, retry, or change jobs.
+
+Enable historical estimates with `--baseline-samples`:
+
+```sh
+gitlab-monitor --url https://git.vs-point.cz --glab-bin glab-agent \
+  watch mr-jobs 237 225 --follow --baseline-samples 5 --baseline-multiplier 1.5
+```
+
+History selects older pipelines on the current pipeline's exact ref.
+Successful jobs supply samples even when their pipeline failed.
+The client reads all history pages before selecting the requested pipeline count.
+Each pipeline contributes its latest attempt for each job name and stage.
+Only successful attempts with recorded execution durations supply samples.
+The baseline is the median execution duration of those samples.
+The baseline includes its sample count and the source `historical_estimate`.
+The execution budget equals that estimate multiplied by `--baseline-multiplier`.
+Explicit execution budgets take precedence.
+Missing history produces no estimated budget.
+History does not estimate pre-start waits.
+The watch caches baselines separately for each pipeline.
+An MR head change loads the new pipeline's baselines.
+Estimates describe historical execution. They do not predict completion times.
+
+Job targets also work with `watch-many` and `--query`.
+JSON targets accept `duration_budgets`, `wait_budgets`, `baseline_samples`, and `baseline_multiplier`.
+CLI budget options apply to CLI targets. JSON targets define their own budgets.
+
+```json
+[
+  {
+    "kind": "mr-jobs",
+    "project": 237,
+    "resource": 225,
+    "duration_budgets": {"verify:apps-parents": 250},
+    "wait_budgets": {"*": 900},
+    "baseline_samples": 5,
+    "baseline_multiplier": 1.5
+  }
+]
+```
+
+For a local source checkout, set `PYTHONPATH=src` inside the project environment:
+
+```sh
+cd /home/solcik/dev/github/solcik/gitlab-monitor/job-monitor
+direnv exec . env PYTHONPATH=src python -m gitlab_monitor \
+  --url https://git.vs-point.cz --glab-bin glab-agent \
+  watch mr-jobs 237 225 --follow --interval 15 --timeout 3600 \
+  --duration-budget 'verify:apps-parents=250' \
+  --duration-budget 'verify:packages-domain=300'
+```
