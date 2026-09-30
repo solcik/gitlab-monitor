@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/solcik/gitlab-monitor/compare/v0.4.0...v0.5.0) (2026-09-30)
+
+
+### Features
+
+* monitor pipeline job attempts and duration budgets ([#12](https://github.com/solcik/gitlab-monitor/issues/12)) ([70e333b](https://github.com/solcik/gitlab-monitor/commit/70e333b23c89d0796dd27a521776558cf30abf4e))
+
 ## [0.4.0](https://github.com/solcik/gitlab-monitor/compare/v0.3.0...v0.4.0) (2026-09-28)
 
 
