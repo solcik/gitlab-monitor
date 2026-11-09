@@ -16,6 +16,6 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
-      - uses: crate-ci/committed@v1.1.11
+      - uses: crate-ci/committed@v1.1.12
         with:
           commits: ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
